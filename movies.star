@@ -87,7 +87,8 @@ def pick_films(config, today, tz):
         date = us_theatrical_date(config, int(m["id"]), tz)
         if date == None:
             continue
-        days = int((date - today).hours / 24 + 0.5)
+        d = (date - today).hours / 24  # round to nearest day (DST can shift by an hour)
+        days = int(d + 0.5) if d >= 0 else -int(-d + 0.5)
         if days < -LOOKBACK_DAYS or days > LOOKAHEAD_DAYS:
             continue
         films.append({"title": m["title"], "poster": m["poster_path"], "date": date, "days": days})
@@ -153,7 +154,7 @@ def main(config):
     if not films:
         return message("No big releases soon")
     for f in films:
-        print("Showing: %s (%s, %+d days)" % (f["title"], f["date"].format("Jan 2"), f["days"]))
+        print("Showing: %s (%s, %d days)" % (f["title"], f["date"].format("Jan 2"), f["days"]))
 
     cards = [render.Animation(children = [card(config, f)] * FRAMES_PER_CARD) for f in films]
     return render.Root(delay = 100, max_age = TTL, child = render.Sequence(children = cards))
