@@ -39,8 +39,16 @@ def api_base(config):
     return config.get("api_url") or API  # api_url / img_url: hidden overrides for local testing
 
 def get_json(config, path, params):
-    url = "%s%s?api_key=%s&%s" % (api_base(config), path, config.get("api_key"), params)
-    resp = http.get(url, ttl_seconds = TTL)
+    key = config.get("api_key").strip()
+
+    # Accept either TMDB credential: the long "API Read Access Token" (a JWT,
+    # sent as a Bearer header) or the short v3 "API Key" (a query parameter).
+    if key.startswith("eyJ"):
+        url = "%s%s?%s" % (api_base(config), path, params)
+        resp = http.get(url, headers = {"Authorization": "Bearer " + key, "accept": "application/json"}, ttl_seconds = TTL)
+    else:
+        url = "%s%s?api_key=%s&%s" % (api_base(config), path, key, params)
+        resp = http.get(url, ttl_seconds = TTL)
     if resp.status_code != 200:
         print("TMDB %s -> HTTP %d" % (path, resp.status_code))  # shows in the Actions log
         return None
