@@ -42,6 +42,7 @@ def get_json(config, path, params):
     url = "%s%s?api_key=%s&%s" % (api_base(config), path, config.get("api_key"), params)
     resp = http.get(url, ttl_seconds = TTL)
     if resp.status_code != 200:
+        print("TMDB %s -> HTTP %d" % (path, resp.status_code))  # shows in the Actions log
         return None
     return resp.json()
 
@@ -143,6 +144,8 @@ def main(config):
         return message("Movies unavailable")
     if not films:
         return message("No big releases soon")
+    for f in films:
+        print("Showing: %s (%s, %+d days)" % (f["title"], f["date"].format("Jan 2"), f["days"]))
 
     cards = [render.Animation(children = [card(config, f)] * FRAMES_PER_CARD) for f in films]
     return render.Root(delay = 100, max_age = TTL, child = render.Sequence(children = cards))
