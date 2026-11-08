@@ -1,19 +1,18 @@
 """
-Coming Soon — the most-anticipated theatrical releases, for Tidbyt.
+Coming Soon — the next most-anticipated theatrical releases, for Tidbyt.
 
-Cycles through up to 5 films, ~3 s each:
-  ┌──────┬───────────────────────────┐
-  │poster│ Title wraps over          │
-  │21x32 │ up to three lines         │
-  │      │ Fri Nov 14                │
-  │      │ in 6 days  /  OUT NOW     │
-  └──────┴───────────────────────────┘
+  ┌──────────────────────────────────┐
+  │ Wicked: For Good          Fri    │  this week: weekday
+  │ Zootopia 2              Nov 26   │  later: month + day
+  │ Avengers: Doomsday      Dec 18   │  long titles scroll
+  └──────────────────────────────────┘
 
-"Anticipated" = TMDB popularity among films with a US theatrical (or limited)
-release from 6 days ago through the next 6 weeks. Dates shown are the US
-theatrical dates, not the world premiere.
+Picks the top 3 by TMDB popularity among films with a US theatrical (or
+limited) release from today through the next 6 weeks, then lists them in
+release order. Films already in theaters are not shown.
 
-Data: TMDB API (free key, passed in as the `api_key` config value).
+Data: TMDB API. `api_key` accepts either the v3 API key or the
+API Read Access Token.
 """
 
 load("http.star", "http")
@@ -22,32 +21,28 @@ load("schema.star", "schema")
 load("time.star", "time")
 
 API = "https://api.themoviedb.org/3"
-IMG = "https://image.tmdb.org/t/p/w92"
 TTL = 6 * 3600
 TZ = "America/New_York"
-MAX_FILMS = 5
-LOOKBACK_DAYS = 6  # keep showing a film through its opening week
+MAX_FILMS = 3
 LOOKAHEAD_DAYS = 42
-FRAMES_PER_CARD = 30  # x 100 ms = 3 s per film
+MAX_CANDIDATES = 15  # most-popular films to check for a US theatrical date
 
 TITLE = "#FFFFFF"
-DATE = "#9AA0A8"
-SOON = "#FFC94A"
-OUT = "#7CE38B"
-
-def api_base(config):
-    return config.get("api_url") or API  # api_url / img_url: hidden overrides for local testing
+SOON = "#FFC94A"  # opening this week
+LATER = "#9AA0A8"
+RULE = "#1C2230"
 
 def get_json(config, path, params):
+    base = config.get("api_url") or API  # api_url: hidden override for local testing
     key = config.get("api_key").strip()
 
     # Accept either TMDB credential: the long "API Read Access Token" (a JWT,
     # sent as a Bearer header) or the short v3 "API Key" (a query parameter).
     if key.startswith("eyJ"):
-        url = "%s%s?%s" % (api_base(config), path, params)
+        url = "%s%s?%s" % (base, path, params)
         resp = http.get(url, headers = {"Authorization": "Bearer " + key, "accept": "application/json"}, ttl_seconds = TTL)
     else:
-        url = "%s%s?api_key=%s&%s" % (api_base(config), path, key, params)
+        url = "%s%s?api_key=%s&%s" % (base, path, key, params)
         resp = http.get(url, ttl_seconds = TTL)
     if resp.status_code != 200:
         print("TMDB %s -> HTTP %d" % (path, resp.status_code))  # shows in the Actions log
@@ -71,77 +66,67 @@ def us_theatrical_date(config, movie_id, tz):
                 best = t
     return best
 
+def days_between(a, b):
+    d = (b - a).hours / 24  # round to nearest day (DST can shift by an hour)
+    return int(d + 0.5) if d >= 0 else -int(-d + 0.5)
+
 def pick_films(config, today, tz):
-    lo = (today - time.parse_duration("%dh" % (24 * LOOKBACK_DAYS))).format("2006-01-02")
     hi = (today + time.parse_duration("%dh" % (24 * LOOKAHEAD_DAYS))).format("2006-01-02")
-    params = "region=US&with_release_type=2|3&release_date.gte=%s&release_date.lte=%s" % (lo, hi)
+    params = "region=US&with_release_type=2|3&release_date.gte=%s&release_date.lte=%s" % (today.format("2006-01-02"), hi)
     params += "&sort_by=popularity.desc&include_adult=false&language=en-US&page=1"
     data = get_json(config, "/discover/movie", params)
     if data == None:
         return None
 
     films = []
-    for m in data.get("results", []):
-        if not m.get("poster_path"):
-            continue
+    for m in data.get("results", [])[:MAX_CANDIDATES]:
         date = us_theatrical_date(config, int(m["id"]), tz)
         if date == None:
             continue
-        d = (date - today).hours / 24  # round to nearest day (DST can shift by an hour)
-        days = int(d + 0.5) if d >= 0 else -int(-d + 0.5)
-        if days < -LOOKBACK_DAYS or days > LOOKAHEAD_DAYS:
+        days = days_between(today, date)
+        if days < 0 or days > LOOKAHEAD_DAYS:  # already out, or too far off
             continue
-        films.append({"title": m["title"], "poster": m["poster_path"], "date": date, "days": days})
+        films.append({"title": m["title"], "date": date, "days": days})
         if len(films) == MAX_FILMS:
             break
 
-    # Show in release order: what's out now first, then the soonest.
     return sorted(films, key = lambda f: f["days"])
 
-def countdown(days):
-    if days <= 0:
-        return ("OUT NOW", OUT)
-    if days == 1:
-        return ("Tomorrow", SOON)
-    if days < 14:
-        return ("in %d days" % days, SOON)
-    return ("in %d wks" % (days // 7), DATE)
+def date_label(f):
+    if f["days"] == 0:
+        return ("Today", SOON)
+    if f["days"] == 1:
+        return ("Tmrw", SOON)
+    if f["days"] < 7:
+        return (f["date"].format("Mon"), SOON)
+    return (f["date"].format("Jan 2"), LATER)
 
-def poster(config, path):
-    base = config.get("img_url") or IMG
-    resp = http.get(base + path, ttl_seconds = 7 * 24 * 3600)
-    if resp.status_code != 200:
-        return render.Box(width = 21, height = 32, color = "#222")
-    return render.Image(src = resp.body(), width = 21, height = 32)
-
-def card(config, f):
-    label, color = countdown(f["days"])
-    text = render.Column(
-        expanded = True,
-        main_align = "space_between",
-        children = [
-            render.Box(
-                width = 42,
-                height = 18,
-                child = render.Column(
-                    expanded = True,
-                    children = [render.WrappedText(f["title"], font = "tom-thumb", color = TITLE, width = 42, height = 18)],
-                ),
+def row(f):
+    label, color = date_label(f)
+    date = render.Text(label, font = "tom-thumb", color = color)
+    title_width = 62 - len(label) * 4 - 5
+    return render.Box(
+        width = 64,
+        height = 10,
+        child = render.Padding(
+            pad = (1, 0, 1, 0),
+            child = render.Row(
+                expanded = True,
+                main_align = "space_between",
+                cross_align = "center",
+                children = [
+                    render.Marquee(
+                        width = title_width,
+                        child = render.Text(f["title"], font = "tom-thumb", color = TITLE),
+                    ),
+                    date,
+                ],
             ),
-            render.Column(children = [
-                render.Text(f["date"].format("Mon Jan 2"), font = "tom-thumb", color = DATE),
-                render.Text(label, font = "tom-thumb", color = color),
-            ]),
-        ],
+        ),
     )
-    return render.Row(children = [
-        poster(config, f["poster"]),
-        render.Box(width = 1, height = 32),
-        render.Padding(pad = (0, 0, 0, 0), child = text),
-    ])
 
 def message(text):
-    return render.Root(child = render.Box(child = render.WrappedText(text, color = DATE, align = "center", width = 60)))
+    return render.Root(child = render.Box(child = render.WrappedText(text, color = LATER, align = "center", width = 60)))
 
 def main(config):
     if not config.get("api_key"):
@@ -154,10 +139,19 @@ def main(config):
     if not films:
         return message("No big releases soon")
     for f in films:
-        print("Showing: %s (%s, %d days)" % (f["title"], f["date"].format("Jan 2"), f["days"]))
+        print("Showing: %s (%s, in %d days)" % (f["title"], f["date"].format("Jan 2"), f["days"]))
 
-    cards = [render.Animation(children = [card(config, f)] * FRAMES_PER_CARD) for f in films]
-    return render.Root(delay = 100, max_age = TTL, child = render.Sequence(children = cards))
+    rows = []
+    for i, f in enumerate(films):
+        if i > 0:
+            rows.append(render.Box(width = 64, height = 1, color = RULE))
+        rows.append(row(f))
+
+    return render.Root(
+        delay = 80,
+        max_age = TTL,
+        child = render.Box(child = render.Column(main_align = "center", expanded = True, children = rows)),
+    )
 
 def get_schema():
     return schema.Schema(
@@ -166,7 +160,7 @@ def get_schema():
             schema.Text(
                 id = "api_key",
                 name = "TMDB API key",
-                desc = "Your TMDB v3 API key.",
+                desc = "Your TMDB v3 API key or API Read Access Token.",
                 icon = "key",
             ),
         ],
